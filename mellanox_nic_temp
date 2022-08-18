@@ -1,0 +1,63 @@
+#!/bin/bash
+set -eu
+
+# Script to read Mellanox NIC temperature using the Mellanox mget_temp_ext tool
+# from https://network.nvidia.com/products/adapter-software/firmware-tools/
+
+# Copyright 2018 The Prometheus Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Author: Jan Phillip Greimann <jan.greimann@cloud.ionos.com>
+# Author: Jan Ivar Beddari <beddari@safespring.com>
+
+# check if root
+if [ "$EUID" -ne 0 ]; then
+    echo "${0##*/}: Please run as root!" >&2
+    exit 1
+fi
+
+# check if programs are installed
+if ! command -v mget_temp_ext >/dev/null 2>&1; then
+    echo "${0##*/}: mget_temp_ext is not installed. Aborting." >&2
+    exit 1
+fi
+
+cat <<EOF
+# HELP node_mget_temp_celsius Celsius temperature of Mellanox NIC.
+# TYPE node_mget_temp_celsius gauge
+EOF
+
+# run for each found Mellanox device
+for file in /sys/class/net/*/device/uevent; do
+    # find Mellanox devices by PCI ID
+    if ! cat "$file" | grep -q PCI_SUBSYS_ID=15B3; then
+        continue
+    fi
+    device_name=$(echo $file | sed 's/\/sys\/class\/net\///; s/\/device\/uevent//')
+    device_id="$(cat $file | sed -n '/PCI_SLOT_NAME=/ s/.*=//p')"
+
+    # get temperature
+    if temperature="$(mget_temp_ext -d "${device_id}")"; then
+        # output
+        echo "node_mget_temp_celsius{device=\"${device_name}\"} ${temperature//[[:space:]]/}"
+    else
+        echo "${0##*/}: Failed to get temperature from Mellanox NIC '${device_name}'!" >&2
+    fi
+done
+
+# if device is empty, no device was found
+if [ -z "${device_id-}" ]; then
+    echo "${0##*/}: No Mellanox NIC device found!" >&2
+    exit 1
+fi
